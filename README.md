@@ -1,2 +1,3 @@
-# rix-thread
-Thread and synchronization utilities: thread creation, mutex, lock, and condition variables.
+# Debug
+
+Debug printing, formatting, logging, and inspection utilities for Rix.
