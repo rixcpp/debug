@@ -7,9 +7,9 @@
 
 int main()
 {
-  rixlib::debug::Debug debug;
+  rixlib::debug::Debug debug{};
 
-  debug.print("Hello {}", "Rix");
+  debug.print("Hello", "Rix");
 
   auto text = debug.format("Package: {}", "rix/debug");
 

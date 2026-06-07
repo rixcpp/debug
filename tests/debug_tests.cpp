@@ -82,14 +82,13 @@ namespace
 
   void test_print_to_stream()
   {
-    const rixlib::debug::Debug debug;
-
     std::ostringstream out;
-    debug.print.to(out, "Hello {}", "Rix");
+
+    rixlib::print_to(out, "Hello", "Rix");
 
     expect_true(
         out.str() == "Hello Rix\n",
-        "debug.print.to should write formatted output with newline");
+        "rixlib::print_to should write arguments separated by spaces with newline");
   }
 
   void test_inspect_to_string()

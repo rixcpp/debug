@@ -1,30 +1,62 @@
 /**
- * @file format.hpp
- * @brief Placeholder-based formatting API for rix/debug.
+ *
+ *  @file format.hpp
+ *  @author Gaspard Kirira
+ *
+ *  Copyright 2025, Gaspard Kirira. All rights reserved.
+ *  https://github.com/rixcpp/rix
+ *  Use of this source code is governed by a MIT license
+ *  that can be found in the License file.
+ *
+ *  Rix
+ *
+ *  Lightweight formatting utilities for rix/debug.
+ *
+ *  Supported placeholders:
+ *    - {}      : automatic argument indexing
+ *    - {0}     : explicit positional indexing
+ *    - {{      : escaped opening brace
+ *    - }}      : escaped closing brace
+ *
+ *  Unsupported on purpose:
+ *    - format specifiers such as {:>10}, {:.2f}, etc.
+ *
+ *  Example:
+ *
+ *    std::string s1 = rixlib::format("Hello, {}", "world");
+ *    std::string s2 = rixlib::format("Value = {0}, name = {1}", 42, "Ada");
+ *    std::string s3 = rixlib::format("{{ config }} = {}", "ready");
+ *
  */
 
 #ifndef RIXCPP_DEBUG_INCLUDE_RIX_DEBUG_FORMAT_HPP_INCLUDED
 #define RIXCPP_DEBUG_INCLUDE_RIX_DEBUG_FORMAT_HPP_INCLUDED
 
 #include <array>
+#include <cctype>
 #include <cstddef>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <type_traits>
+#include <utility>
 
-namespace rixlib::debug
+#include <rix/debug/print.hpp>
+
+namespace rixlib
 {
-  class FormatError : public std::runtime_error
+  /**
+   * @brief Exception type thrown on invalid format strings or invalid argument access.
+   */
+  class format_error : public std::runtime_error
   {
   public:
-    explicit FormatError(const std::string &message)
+    explicit format_error(const std::string &message)
         : std::runtime_error(message)
     {
     }
 
-    explicit FormatError(const char *message)
+    explicit format_error(const char *message)
         : std::runtime_error(message)
     {
     }
@@ -32,28 +64,41 @@ namespace rixlib::debug
 
   namespace detail
   {
+    /**
+     * @brief Convert a value to string using the Rix rendering pipeline.
+     */
     template <typename T>
-    [[nodiscard]] std::string render_value(const T &value)
+    [[nodiscard]] inline std::string format_arg_to_string(const T &value)
     {
-      std::ostringstream stream;
+      std::ostringstream oss;
 
-      if constexpr (std::is_same_v<std::remove_cvref_t<T>, bool>)
+      auto &cfg = rixlib::default_config();
+      const bool old_raw_strings = cfg.raw_strings;
+
+      cfg.raw_strings = true;
+
+      try
       {
-        stream << (value ? "true" : "false");
+        rixlib::detail::write(oss, value);
       }
-      else
+      catch (...)
       {
-        stream << value;
+        cfg.raw_strings = old_raw_strings;
+        throw;
       }
 
-      return stream.str();
+      cfg.raw_strings = old_raw_strings;
+      return oss.str();
     }
 
-    class RenderedArgs
+    /**
+     * @brief Small non-owning view over a pre-rendered argument list.
+     */
+    class rendered_arg_list
     {
     public:
       template <std::size_t N>
-      explicit RenderedArgs(const std::array<std::string, N> &values) noexcept
+      explicit rendered_arg_list(const std::array<std::string, N> &values) noexcept
           : data_(values.data()), size_(N)
       {
       }
@@ -67,31 +112,34 @@ namespace rixlib::debug
       {
         if (index >= size_)
         {
-          throw FormatError("format argument index out of range");
+          throw format_error("format argument index out of range");
         }
 
         return data_[index];
       }
 
     private:
-      const std::string *data_{nullptr};
-      std::size_t size_{0};
+      const std::string *data_ = nullptr;
+      std::size_t size_ = 0;
     };
 
+    /**
+     * @brief Parse an unsigned decimal integer from a placeholder body.
+     */
     [[nodiscard]] inline std::size_t parse_index(std::string_view text)
     {
       if (text.empty())
       {
-        throw FormatError("empty explicit format index");
+        throw format_error("empty explicit format index");
       }
 
       std::size_t value = 0;
 
       for (char ch : text)
       {
-        if (ch < '0' || ch > '9')
+        if (!std::isdigit(static_cast<unsigned char>(ch)))
         {
-          throw FormatError("invalid explicit format index");
+          throw format_error("invalid explicit format index");
         }
 
         value = (value * 10u) + static_cast<std::size_t>(ch - '0');
@@ -100,10 +148,12 @@ namespace rixlib::debug
       return value;
     }
 
-    inline void render_format_string(
-        std::string &out,
-        std::string_view fmt,
-        const RenderedArgs &args)
+    /**
+     * @brief Render a format string into the destination string.
+     */
+    inline void render_format_string(std::string &out,
+                                     std::string_view fmt,
+                                     const rendered_arg_list &args)
     {
       std::size_t i = 0;
       std::size_t next_auto_index = 0;
@@ -124,10 +174,9 @@ namespace rixlib::debug
           }
 
           const std::size_t close = fmt.find('}', i + 1u);
-
           if (close == std::string_view::npos)
           {
-            throw FormatError("unmatched '{' in format string");
+            throw format_error("unmatched '{' in format string");
           }
 
           const std::string_view token = fmt.substr(i + 1u, close - (i + 1u));
@@ -136,7 +185,7 @@ namespace rixlib::debug
           {
             if (used_explicit_index)
             {
-              throw FormatError("cannot mix automatic and explicit format indexes");
+              throw format_error("cannot mix automatic and explicit argument indexing");
             }
 
             used_auto_index = true;
@@ -146,12 +195,12 @@ namespace rixlib::debug
           {
             if (used_auto_index)
             {
-              throw FormatError("cannot mix automatic and explicit format indexes");
+              throw format_error("cannot mix automatic and explicit argument indexing");
             }
 
             if (token.find(':') != std::string_view::npos)
             {
-              throw FormatError("format specifiers are not supported yet");
+              throw format_error("format specifiers are not supported");
             }
 
             used_explicit_index = true;
@@ -171,7 +220,7 @@ namespace rixlib::debug
             continue;
           }
 
-          throw FormatError("single '}' encountered in format string");
+          throw format_error("single '}' encountered in format string");
         }
 
         out.push_back(ch);
@@ -179,9 +228,11 @@ namespace rixlib::debug
       }
     }
 
-    [[nodiscard]] inline std::size_t estimate_output_size(
-        std::string_view fmt,
-        const RenderedArgs &args)
+    /**
+     * @brief Estimate a useful output capacity before rendering.
+     */
+    [[nodiscard]] inline std::size_t estimate_output_size(std::string_view fmt,
+                                                          const rendered_arg_list &args)
     {
       std::size_t total = fmt.size();
 
@@ -192,37 +243,79 @@ namespace rixlib::debug
 
       return total;
     }
+
+  } // namespace detail
+
+  /**
+   * @brief Format values into a new string using Rix placeholder syntax.
+   */
+  template <typename... Args>
+  [[nodiscard]] std::string format(std::string_view fmt, const Args &...args)
+  {
+    std::array<std::string, sizeof...(Args)> rendered_args{
+        detail::format_arg_to_string(args)...};
+
+    detail::rendered_arg_list rendered{rendered_args};
+
+    std::string out;
+    out.reserve(detail::estimate_output_size(fmt, rendered));
+
+    detail::render_format_string(out, fmt, rendered);
+
+    return out;
   }
 
+  /**
+   * @brief Append formatted output to an existing string.
+   */
+  template <typename... Args>
+  void format_append(std::string &out, std::string_view fmt, const Args &...args)
+  {
+    std::array<std::string, sizeof...(Args)> rendered_args{
+        detail::format_arg_to_string(args)...};
+
+    detail::rendered_arg_list rendered{rendered_args};
+
+    out.reserve(out.size() + detail::estimate_output_size(fmt, rendered));
+    detail::render_format_string(out, fmt, rendered);
+  }
+
+  /**
+   * @brief Replace the destination string with formatted output.
+   */
+  template <typename... Args>
+  void format_to(std::string &out, std::string_view fmt, const Args &...args)
+  {
+    out.clear();
+    format_append(out, fmt, args...);
+  }
+
+} // namespace rixlib
+
+namespace rixlib::debug
+{
+  /**
+   * @brief Object-style formatting API mounted into rixlib::debug::Debug.
+   */
   class Format
   {
   public:
     template <typename... Args>
     [[nodiscard]] std::string operator()(std::string_view fmt, const Args &...args) const
     {
-      std::array<std::string, sizeof...(Args)> rendered_args{
-          detail::render_value(args)...};
-
-      const detail::RenderedArgs rendered{rendered_args};
-
-      std::string output;
-      output.reserve(detail::estimate_output_size(fmt, rendered));
-      detail::render_format_string(output, fmt, rendered);
-
-      return output;
+      return rixlib::format(fmt, args...);
     }
 
     template <typename... Args>
     void append(std::string &out, std::string_view fmt, const Args &...args) const
     {
-      out += operator()(fmt, args...);
+      rixlib::format_append(out, fmt, args...);
     }
 
     template <typename... Args>
     void to(std::string &out, std::string_view fmt, const Args &...args) const
     {
-      out.clear();
-      append(out, fmt, args...);
+      rixlib::format_to(out, fmt, args...);
     }
   };
 }
